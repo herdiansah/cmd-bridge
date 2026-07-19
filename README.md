@@ -146,3 +146,9 @@ If `BRIDGE_API_KEY` is set, send it to the bridge as:
 ```text
 Authorization: Bearer <BRIDGE_API_KEY>
 ```
+
+## Support the project
+
+This tool is free to use. If it helps your workflow, consider buying me an ice cream or coffee so I can keep creating free tools:
+
+[Support Flash ID](https://teer.id/flash-id)
