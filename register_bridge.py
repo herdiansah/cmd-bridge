@@ -38,6 +38,7 @@ def register() -> None:
 
     with sqlite3.connect(DB_PATH) as conn:
         cursor = conn.cursor()
+        cursor.execute("DELETE FROM kv WHERE scope = 'customModels' AND key LIKE '%|cmdcode/%|llm'")
         cursor.execute(
             "SELECT id FROM providerNodes WHERE json_extract(data, '$.prefix') IN (?, ?)",
             (PREFIX, "commandcode"),
@@ -45,6 +46,7 @@ def register() -> None:
         old_node_ids = [row[0] for row in cursor.fetchall()]
         for old_node_id in old_node_ids:
             cursor.execute("DELETE FROM providerConnections WHERE provider = ?", (old_node_id,))
+            cursor.execute("DELETE FROM kv WHERE scope = 'customModels' AND key LIKE ?", (f"{old_node_id}|%",))
             cursor.execute("DELETE FROM providerNodes WHERE id = ?", (old_node_id,))
 
         cursor.execute(
