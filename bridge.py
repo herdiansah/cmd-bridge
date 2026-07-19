@@ -60,8 +60,8 @@ HOST = os.environ.get("COMMANDCODE_BRIDGE_HOST", "127.0.0.1")
 PORT = int(os.environ.get("COMMANDCODE_BRIDGE_PORT", "8320"))
 TIMEOUT = int(os.environ.get("COMMANDCODE_BRIDGE_TIMEOUT", "600"))
 
-default_workdir = os.path.join(tempfile.gettempdir(), "commandcode-bridge-workdir")
-WORKDIR = os.environ.get("COMMANDCODE_BRIDGE_WORKDIR", default_workdir)
+default_workdir = os.getcwd()
+WORKDIR = os.path.abspath(os.environ.get("COMMANDCODE_BRIDGE_WORKDIR", default_workdir))
 
 
 def resolve_model(model: str) -> str:
@@ -266,7 +266,7 @@ class Handler(BaseHTTPRequestHandler):
             if not isinstance(messages, list):
                 raise ValueError("messages must be an array")
             prompt = messages_to_prompt(messages)
-            max_turns = int(req.get("max_turns") or os.environ.get("COMMANDCODE_BRIDGE_MAX_TURNS", "3"))
+            max_turns = int(req.get("max_turns") or os.environ.get("COMMANDCODE_BRIDGE_MAX_TURNS", "10"))
             content = run_command_code(model, prompt, max_turns=max_turns)
             if req.get("stream"):
                 self.send_response(200)

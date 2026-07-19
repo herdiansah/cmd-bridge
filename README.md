@@ -138,7 +138,8 @@ The PM2 configuration reads `COMMAND_CODE_API_KEY` from the process environment;
 | `COMMANDCODE_BRIDGE_HOST` | `127.0.0.1` | Bridge bind address. |
 | `COMMANDCODE_BRIDGE_PORT` | `8320` | Bridge port. |
 | `COMMANDCODE_BRIDGE_TIMEOUT` | `600` | Command Code CLI timeout in seconds. |
-| `COMMANDCODE_BRIDGE_WORKDIR` | System temp directory | CLI working directory. |
+| `COMMANDCODE_BRIDGE_WORKDIR` | Bridge launch directory | Workspace available to the Command Code agent. |
+| `COMMANDCODE_BRIDGE_MAX_TURNS` | `10` | Maximum agent turns per request. |
 | `BRIDGE_API_KEY` | Unset | Optional bearer token required by the bridge API. |
 
 If `BRIDGE_API_KEY` is set, send it to the bridge as:
