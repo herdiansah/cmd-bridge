@@ -7,13 +7,5 @@ if not errorlevel 1 (
   exit /b 0
 )
 
-if "%COMMAND_CODE_API_KEY%"=="" (
-  set /p "COMMAND_CODE_API_KEY=Enter your Command Code API key: "
-)
-
-if "%COMMAND_CODE_API_KEY%"=="" (
-  echo COMMAND_CODE_API_KEY is required.
-  exit /b 1
-)
 
 python "%~dp0bridge.py"

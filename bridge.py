@@ -15,6 +15,7 @@ import subprocess
 import tempfile
 import time
 import uuid
+from config import load_config
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
@@ -33,8 +34,10 @@ ALIASES = {
     "mimo-v2.5-pro": "xiaomi/mimo-v2.5-pro",
 }
 
+CONFIG = load_config()
+
 def resolve_cmd_bin() -> str:
-    env_bin = os.environ.get("COMMAND_CODE_BIN")
+    env_bin = CONFIG.get("COMMAND_CODE_BIN")
     if env_bin:
         if os.name == "nt" and env_bin in {"cmd", "cmd.cmd", "cmd.exe"}:
             appdata = os.environ.get("APPDATA", "")
@@ -54,14 +57,14 @@ def resolve_cmd_bin() -> str:
 
 
 CMD_BIN = resolve_cmd_bin()
-COMMAND_CODE_API_KEY = os.environ.get("COMMAND_CODE_API_KEY", "")
-BRIDGE_API_KEY = os.environ.get("BRIDGE_API_KEY", "")
-HOST = os.environ.get("COMMANDCODE_BRIDGE_HOST", "127.0.0.1")
-PORT = int(os.environ.get("COMMANDCODE_BRIDGE_PORT", "8320"))
-TIMEOUT = int(os.environ.get("COMMANDCODE_BRIDGE_TIMEOUT", "600"))
+COMMAND_CODE_API_KEY = CONFIG.get("COMMAND_CODE_API_KEY", "")
+BRIDGE_API_KEY = CONFIG.get("BRIDGE_API_KEY", "")
+HOST = CONFIG.get("COMMANDCODE_BRIDGE_HOST", "127.0.0.1")
+PORT = int(CONFIG.get("COMMANDCODE_BRIDGE_PORT", "8320"))
+TIMEOUT = int(CONFIG.get("COMMANDCODE_BRIDGE_TIMEOUT", "600"))
 
 default_workdir = os.getcwd()
-WORKDIR = os.path.abspath(os.environ.get("COMMANDCODE_BRIDGE_WORKDIR", default_workdir))
+WORKDIR = os.path.abspath(CONFIG.get("COMMANDCODE_BRIDGE_WORKDIR", default_workdir))
 
 
 def resolve_model(model: str) -> str:
@@ -118,18 +121,23 @@ def messages_to_prompt(messages: list[dict[str, Any]]) -> str:
     return "\n\n".join(prompt_parts)
 
 
+def command_code_env() -> dict[str, str]:
+    names = ("APPDATA", "COMSPEC", "HOMEDRIVE", "HOMEPATH", "LOCALAPPDATA", "PATH", "SYSTEMROOT", "TEMP", "TMP", "USERPROFILE")
+    env = {name: os.environ[name] for name in names if name in os.environ}
+    env["COMMAND_CODE_API_KEY"] = COMMAND_CODE_API_KEY
+    return env
+
+
 def run_command_code(model: str, prompt: str, max_turns: int = 1) -> str:
     if not COMMAND_CODE_API_KEY:
         raise RuntimeError("COMMAND_CODE_API_KEY is not set")
     os.makedirs(WORKDIR, exist_ok=True)
-    env = os.environ.copy()
-    env["COMMAND_CODE_API_KEY"] = COMMAND_CODE_API_KEY
+    env = command_code_env()
     cmd_dir = os.path.dirname(CMD_BIN)
     if cmd_dir:
         env["PATH"] = cmd_dir + os.pathsep + env.get("PATH", "")
-    else:
-        if os.name != "nt":
-            env["PATH"] = "/home/deploy/.npm-global/bin:" + env.get("PATH", "")
+    elif os.name != "nt":
+        env["PATH"] = "/home/deploy/.npm-global/bin:" + env.get("PATH", "")
     # Pass the prompt over stdin instead of argv. Gateway conversations can be
     # large enough to exceed the OS argument-size limit when forwarded as
     # `cmd -p <prompt>`.
@@ -266,7 +274,7 @@ class Handler(BaseHTTPRequestHandler):
             if not isinstance(messages, list):
                 raise ValueError("messages must be an array")
             prompt = messages_to_prompt(messages)
-            max_turns = int(req.get("max_turns") or os.environ.get("COMMANDCODE_BRIDGE_MAX_TURNS", "10"))
+            max_turns = int(req.get("max_turns") or CONFIG.get("COMMANDCODE_BRIDGE_MAX_TURNS", "10"))
             content = run_command_code(model, prompt, max_turns=max_turns)
             if req.get("stream"):
                 self.send_response(200)

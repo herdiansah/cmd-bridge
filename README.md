@@ -20,23 +20,14 @@ OpenAI-compatible local gateway for the Command Code CLI. It exposes Command Cod
 
 ## Configure the Command Code key
 
-Set the key for the current PowerShell session:
+Copy the repository template, then add your key to the local `.env` file:
 
 ```powershell
-$env:COMMAND_CODE_API_KEY = "your-commandcode-key"
+Copy-Item .env.example .env
+notepad .env
 ```
 
-To persist it for future terminals, use:
-
-```powershell
-[Environment]::SetEnvironmentVariable(
-  "COMMAND_CODE_API_KEY",
-  "your-commandcode-key",
-  "User"
-)
-```
-
-Open a new terminal after setting a persistent user environment variable.
+`.env` is ignored by Git. Keep it local and never commit it.
 
 ## Start the bridge
 
@@ -46,9 +37,9 @@ The bridge is not installed as a Windows startup task. Run this batch file after
 .\start-commandcode-bridge.bat
 ```
 
-It exits successfully when the bridge is already healthy; otherwise it prompts for an unset API key and runs the bridge in that terminal. Keep that terminal open while using the bridge.
+It exits successfully when the bridge is already healthy; otherwise it starts the bridge using the repository-local `.env` file. Keep that terminal open while using the bridge.
 
-`start-bridge.cmd` is an equivalent non-interactive launcher for sessions where `COMMAND_CODE_API_KEY` is already set.
+`start-bridge.cmd` is an equivalent non-interactive launcher.
 
 ## Stop the bridge
 
@@ -127,13 +118,13 @@ pm2 start .\ecosystem.config.cjs
 pm2 save
 ```
 
-The PM2 configuration reads `COMMAND_CODE_API_KEY` from the process environment; it does not store credentials in the repository.
+The PM2 configuration reads the repository-local `.env` file; it does not store credentials in PM2 or the repository.
 
 ## Configuration
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `COMMAND_CODE_API_KEY` | Required | Command Code API key. |
+| `COMMAND_CODE_API_KEY` | Required | Command Code API key, stored only in the local `.env` file. |
 | `COMMAND_CODE_BIN` | Auto-detected | Explicit Command Code executable path. On Windows, use the npm shim such as `%APPDATA%\npm\command-code.cmd`. |
 | `COMMANDCODE_BRIDGE_HOST` | `127.0.0.1` | Bridge bind address. |
 | `COMMANDCODE_BRIDGE_PORT` | `8320` | Bridge port. |
