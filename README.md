@@ -112,11 +112,19 @@ curl.exe -X POST http://127.0.0.1:20128/v1/chat/completions `
 
 ## Agent capabilities and safety
 
-The bridge runs Command Code in non-interactive print mode with `--trust`. It can inspect and review files in `COMMANDCODE_BRIDGE_WORKDIR`, but Command Code disables mutating tools in this mode: models cannot write or edit files or run shell commands.
+**Current mode: chat, discussion, and read-only code review.** `cmdcode/*` models can inspect files in `COMMANDCODE_BRIDGE_WORKDIR` and return analysis or recommendations, but they cannot modify the workspace.
 
-`--trust` skips the project-trust prompt; it does not enable writes. Command Code requires `--yolo` to enable mutating tools in print mode. The bridge intentionally does not use it: every request reaching 9router would then be able to modify the bridge workspace without approval.
+| Capability | Supported |
+| --- | --- |
+| Chat, discussion, and code explanations | Yes |
+| Read and review workspace files | Yes |
+| Create, edit, or delete files | No |
+| Run shell commands | No |
+| OpenAI function calling (`tools`, `tool_choice`) | No |
 
-OpenAI `tools` and `tool_choice` request fields are not supported by this bridge. They are not forwarded to Command Code, so models return normal text rather than OpenAI `tool_calls`.
+The bridge runs Command Code in non-interactive print mode with `--trust`. In that mode, Command Code disables mutating tools. `--trust` skips the project-trust prompt; it does not enable writes.
+
+Command Code requires `--yolo` to enable mutating tools in print mode. The bridge intentionally does not use it: every request reaching 9router would then be able to modify the bridge workspace without approval.
 
 ## PM2 option
 
