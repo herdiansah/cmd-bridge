@@ -73,7 +73,7 @@ curl.exe -X POST http://127.0.0.1:8320/v1/chat/completions `
 
 ## Register with 9router
 
-With the bridge running and `COMMAND_CODE_API_KEY` set:
+With the bridge running and its local `.env` configured:
 
 ```powershell
 python .\register_bridge.py
@@ -94,6 +94,8 @@ The registration creates the OpenAI-compatible provider at `http://127.0.0.1:832
 - `cmdcode/MiniMaxAI/MiniMax-M3`
 - `cmdcode/xiaomi/mimo-v2.5-pro`
 
+Registration removes stale cached `cmdcode` models before creating the provider, so 9router exposes only these four canonical IDs.
+
 Use 9router's OpenAI-compatible endpoint:
 
 ```text
@@ -107,6 +109,14 @@ curl.exe -X POST http://127.0.0.1:20128/v1/chat/completions `
   -H "Content-Type: application/json" `
   -d '{"model":"cmdcode/deepseek/deepseek-v4-pro","stream":false,"messages":[{"role":"user","content":"What is 2+2?"}]}'
 ```
+
+## Agent capabilities and safety
+
+The bridge runs Command Code in non-interactive print mode with `--trust`. It can inspect and review files in `COMMANDCODE_BRIDGE_WORKDIR`, but Command Code disables mutating tools in this mode: models cannot write or edit files or run shell commands.
+
+`--trust` skips the project-trust prompt; it does not enable writes. Command Code requires `--yolo` to enable mutating tools in print mode. The bridge intentionally does not use it: every request reaching 9router would then be able to modify the bridge workspace without approval.
+
+OpenAI `tools` and `tool_choice` request fields are not supported by this bridge. They are not forwarded to Command Code, so models return normal text rather than OpenAI `tool_calls`.
 
 ## PM2 option
 
