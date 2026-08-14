@@ -8,16 +8,26 @@ credits.
 """
 
 from __future__ import annotations
+import threading
 
 import json
 import os
+import re
 import subprocess
-import tempfile
 import time
 import uuid
-from config import load_config
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
+
+try:
+    import winpty
+    HAS_WINPTY = True
+except ImportError:
+    HAS_WINPTY = False
+    if os.name == "nt":
+        print("Warning: winpty not installed. Install with: pip install pywinpty", file=sys.stderr)
+
+from config import load_config
 
 MODELS = [
     "deepseek/deepseek-v4-pro",
@@ -27,7 +37,9 @@ MODELS = [
 ]
 
 ALIASES = {
+    "commandcode": "deepseek/deepseek-v4-flash",
     "deepseek-v4-pro": "deepseek/deepseek-v4-pro",
+    "deepseek-v4-flash": "deepseek/deepseek-v4-flash",
     "nemotron-3-ultra": "nvidia/nemotron-3-ultra-550b-a55b",
     "nemotron-3-ultra-550b-a55b": "nvidia/nemotron-3-ultra-550b-a55b",
     "minimax-m3": "MiniMaxAI/MiniMax-M3",
@@ -128,22 +140,98 @@ def command_code_env() -> dict[str, str]:
     return env
 
 
-def run_command_code(model: str, prompt: str, max_turns: int = 1) -> str:
+def run_command_code(model: str, prompt: str, max_turns: int = 1, keepalive_callback=None) -> str:
     if not COMMAND_CODE_API_KEY:
         raise RuntimeError("COMMAND_CODE_API_KEY is not set")
     os.makedirs(WORKDIR, exist_ok=True)
+    
+    # Use subprocess by default (handles stdin properly)
+    # PTY only if subprocess fails due to TTY requirement
+    return run_command_code_subprocess(model, prompt, max_turns, keepalive_callback)
+
+
+def run_command_code_pty(model: str, prompt: str, max_turns: int = 1) -> str:
+    """Run Command Code CLI with PTY (Windows with winpty)."""
+    import tempfile
+    env = command_code_env()
+    
+    # Write prompt to temp file to avoid Windows command-line length limits
+    with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', delete=False, suffix='.txt') as f:
+        f.write(prompt)
+        prompt_file = f.name
+    
+    try:
+        # Create PTY
+        pty = winpty.PTY(120, 40)
+        
+        # Build command with stdin redirection from file
+        env_setup = f'set COMMAND_CODE_API_KEY={COMMAND_CODE_API_KEY}'
+        cmd_args = f'{CMD_BIN} -p --model {model} --trust --skip-onboarding --max-turns {max_turns} < "{prompt_file}"'
+        cmdline = f'cmd /c "{env_setup} && {cmd_args}"'
+        
+        # Spawn process
+        pty.spawn(cmdline)
+        
+        # Read output with timeout
+        output = ""
+        start = time.time()
+        last_output = start
+        
+        while time.time() - start < TIMEOUT:
+            if not pty.isalive():
+                break
+            try:
+                chunk = pty.read()
+                if chunk:
+                    output += chunk
+                    last_output = time.time()
+                elif time.time() - last_output > 10:
+                    # No output for 10s, check if process finished
+                    if not pty.isalive():
+                        break
+            except:
+                pass
+            time.sleep(0.1)
+        
+        # Get exit code
+        exit_code = pty.get_exitstatus() if not pty.isalive() else None
+        
+        # Handle timeout
+        if pty.isalive():
+            raise RuntimeError(f"Command Code CLI timed out after {TIMEOUT}s")
+        
+        # Strip ANSI escape codes and terminal control sequences
+        ansi_escape = re.compile(r'\x1b\[[0-9;?]*[a-zA-Z]|\x1b\][^\x1b]*\x1b\\|\x1b[=>]|\x1b[()][AB0]|\x1b\][0-9];[^\x07]*\x07|\x1b\[[0-9]*t')
+        output = ansi_escape.sub('', output).strip()
+        
+        # Handle exit codes
+        if exit_code == 8 and output:
+            return output
+        if exit_code != 0:
+            detail = output or "Command Code CLI failed"
+            raise RuntimeError(f"cmd exited {exit_code}: {detail}")
+        
+        return output
+    finally:
+        # Clean up temp file
+        try:
+            os.unlink(prompt_file)
+        except:
+            pass
+
+
+def run_command_code_subprocess(model: str, prompt: str, max_turns: int = 1, keepalive_callback=None) -> str:
+    """Run Command Code CLI with subprocess (fallback for non-Windows or no winpty)."""
     env = command_code_env()
     cmd_dir = os.path.dirname(CMD_BIN)
     if cmd_dir:
         env["PATH"] = cmd_dir + os.pathsep + env.get("PATH", "")
     elif os.name != "nt":
         env["PATH"] = "/home/deploy/.npm-global/bin:" + env.get("PATH", "")
-    # Pass the prompt over stdin instead of argv. Gateway conversations can be
-    # large enough to exceed the OS argument-size limit when forwarded as
-    # `cmd -p <prompt>`.
+    
     cmd = [
         CMD_BIN,
-        "-p",
+        "-p",  # non-interactive mode, reads from stdin
         "--model",
         model,
         "--trust",
@@ -151,25 +239,58 @@ def run_command_code(model: str, prompt: str, max_turns: int = 1) -> str:
         "--max-turns",
         str(max_turns),
     ]
-    proc = subprocess.run(
+    
+    # Start the process. On Windows, suppress the console window that the
+    # child would otherwise inherit/spawn (CREATE_NO_WINDOW).
+    popen_kwargs: dict[str, Any] = {}
+    if os.name == "nt":
+        popen_kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+    proc = subprocess.Popen(
         cmd,
         cwd=WORKDIR,
         env=env,
-        input=prompt,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
         text=True,
         encoding="utf-8",
         errors="replace",
-        capture_output=True,
-        timeout=TIMEOUT,
+        **popen_kwargs,
     )
-    # Command Code exits with 8 when --max-turns is reached. In bridge mode that
-    # should not poison CLIProxy auth if the CLI still produced useful text.
-    if proc.returncode == 8 and proc.stdout.strip():
-        return proc.stdout.strip()
+    
+    # Write prompt and close stdin
+    proc.stdin.write(prompt)
+    proc.stdin.close()
+    
+    # Periodic keepalive while waiting
+    stop_keepalive = threading.Event()
+    def keepalive_loop():
+        while not stop_keepalive.wait(15):  # Send keepalive every 15 seconds
+            if keepalive_callback:
+                keepalive_callback()
+    
+    keepalive_thread = None
+    if keepalive_callback:
+        keepalive_thread = threading.Thread(target=keepalive_loop, daemon=True)
+        keepalive_thread.start()
+    
+    try:
+        stdout, stderr = proc.communicate(timeout=TIMEOUT)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        stdout, stderr = proc.communicate()
+        raise subprocess.TimeoutExpired(cmd, TIMEOUT)
+    finally:
+        stop_keepalive.set()
+        if keepalive_thread:
+            keepalive_thread.join(timeout=1)
+    
+    if proc.returncode == 8 and stdout.strip():
+        return stdout.strip()
     if proc.returncode != 0:
-        detail = (proc.stderr or proc.stdout or "Command Code CLI failed").strip()
+        detail = (stderr or stdout or "Command Code CLI failed").strip()
         raise RuntimeError(f"cmd exited {proc.returncode}: {detail}")
-    return proc.stdout.strip()
+    return stdout.strip()
 
 
 def completion_response(model: str, content: str) -> dict[str, Any]:
@@ -231,6 +352,13 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _safe_error(self, status: int, message: str, errtype: str) -> None:
+        """Send an error response, silently dropping it if the client is gone."""
+        try:
+            self._send_json(status, {"error": {"message": message, "type": errtype}})
+        except OSError:
+            self.close_connection = True
+
     def _read_json(self) -> dict[str, Any]:
         length = int(self.headers.get("Content-Length", "0") or "0")
         raw = self.rfile.read(length) if length else b"{}"
@@ -275,23 +403,46 @@ class Handler(BaseHTTPRequestHandler):
                 raise ValueError("messages must be an array")
             prompt = messages_to_prompt(messages)
             max_turns = int(req.get("max_turns") or CONFIG.get("COMMANDCODE_BRIDGE_MAX_TURNS", "10"))
-            content = run_command_code(model, prompt, max_turns=max_turns)
+            
+            # For streaming, send headers early and use keepalive.
+            # Body is EOF-delimited (HTTP/1.0 + Connection: close): never set
+            # Transfer-Encoding: chunked, since http.server does not chunk
+            # frames automatically and clients abort on the mismatch.
             if req.get("stream"):
                 self.send_response(200)
                 self.send_header("Content-Type", "text/event-stream")
                 self.send_header("Cache-Control", "no-cache")
                 self.send_header("Connection", "close")
                 self.end_headers()
+
+                # Keepalive callback sends SSE comment lines (ignored by parsers)
+                # so client-side read timeouts don't fire during long runs.
+                def send_keepalive() -> None:
+                    try:
+                        self.wfile.write(b": keepalive\n\n")
+                        self.wfile.flush()
+                    except OSError:
+                        pass
+
+                # Run CLI with keepalive
+                content = run_command_code(model, prompt, max_turns=max_turns, keepalive_callback=send_keepalive)
+
+                # Send actual content chunks; client disconnect is normal here.
                 for chunk in stream_chunks(model, content):
                     self.wfile.write(chunk)
                     self.wfile.flush()
                 self.close_connection = True
             else:
+                # Non-streaming: just run normally
+                content = run_command_code(model, prompt, max_turns=max_turns)
                 self._send_json(200, completion_response(model, content))
+        except ConnectionError:
+            # Client closed the socket mid-response; nothing to send back.
+            self.close_connection = True
         except subprocess.TimeoutExpired:
-            self._send_json(504, {"error": {"message": "Command Code CLI timed out", "type": "timeout_error"}})
+            self._safe_error(504, "Command Code CLI timed out", "timeout_error")
         except Exception as exc:
-            self._send_json(500, {"error": {"message": str(exc), "type": "bridge_error"}})
+            self._safe_error(500, str(exc), "bridge_error")
 
 
 def main() -> None:
